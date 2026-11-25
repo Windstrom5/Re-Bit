@@ -216,7 +216,7 @@ Audio File ──▶ Native Decoder ──▶ PcmContainerPacker ──▶ UsbIs
 
 ## 📥 Download
 
-Get the latest APK from **[Releases](https://github.com/Windstrom5/Audio-Player/releases)**. Re:Bit comes in two editions of the same app (package `com.windstrom5.rebit`):
+Get the latest APK from **[Releases](https://github.com/Windstrom5/Re-Bit/releases)**. Re:Bit comes in two editions of the same app (package `com.windstrom5.rebit`):
 
 | Edition | APK | What's inside |
 | :--- | :--- | :--- |
@@ -242,8 +242,8 @@ Install only one edition: both share the same package name, so the second one re
 ### Build via Gradle
 ```bash
 # Clone the repository
-git clone https://github.com/Windstrom5/Audio-Player.git
-cd Audio-Player
+git clone https://github.com/Windstrom5/Re-Bit.git
+cd Re-Bit
 
 # Run unit tests (300+ tests: DSP, USB scheduler, loudness, statistics)
 ./gradlew testLiteDebugUnitTest
