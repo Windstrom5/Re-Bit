@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="com.thesis.bitperfectusb.playback.ai.KaraokeMicScorerTest" tests="2" skipped="0" failures="0" errors="0" timestamp="2026-09-05T07:26:02.457Z" hostname="MSI" time="0.005">
-  <properties/>
-  <testcase name="test initial score state is ready and empty" classname="com.thesis.bitperfectusb.playback.ai.KaraokeMicScorerTest" time="0.004"/>
-  <testcase name="test resetScore resets score and combo to zero" classname="com.thesis.bitperfectusb.playback.ai.KaraokeMicScorerTest" time="0.001"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

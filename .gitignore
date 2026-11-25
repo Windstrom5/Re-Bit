@@ -1,0 +1,23 @@
+# Build output
+build/
+.gradle/
+.kotlin/
+.cxx/
+bin/
+*.apk
+*.aab
+
+# IDE / machine-specific
+.idea/
+*.iml
+local.properties
+.DS_Store
+captures/
+
+# Release signing: never commit the key or its passwords (see RELEASING.md)
+keystore.properties
+*.jks
+*.keystore
+
+# Stray console capture
+tallDebug

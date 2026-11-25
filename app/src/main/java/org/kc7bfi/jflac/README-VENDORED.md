@@ -45,7 +45,7 @@ requirements apply to this package.
 
 ## Usage in this app
 
-See `com.thesis.bitperfectusb.playback.FlacDecoder` — specifically the
+See `com.windstrom5.rebit.playback.FlacDecoder` — specifically the
 private `JflacPcmSource` class — for how this is used as a last-resort
 software fallback when every MediaCodec FLAC decoder candidate fails on
 device.

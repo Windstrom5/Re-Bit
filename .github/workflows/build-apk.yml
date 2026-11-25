@@ -1,0 +1,73 @@
+name: Build debug APK
+
+# Manual trigger (Actions tab -> Build debug APK -> Run workflow) and on
+# every push, so pushing this project to GitHub gets you a downloadable APK
+# without needing Android Studio or any local SDK at all. GitHub's runners
+# have full network access to Google's Maven and the Android SDK/NDK
+# installers — none of which were reachable from the sandbox that wrote
+# this project, so this workflow is also the first real end-to-end build
+# check any of this code has had. Read the run's log even on success: a
+# green checkmark means it compiled and packaged, not that any of the
+# untested pieces (the native USB driver, the on-device neural model, the
+# P2P sync) behave correctly on real hardware — see CHANGES.md for exactly
+# which parts still need that.
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK platform, build-tools, NDK + CMake
+        # Explicit rather than relying on setup-android's defaults — this
+        # project targets compileSdk 36 (see app/build.gradle.kts), recent
+        # enough that a default SDK install isn't guaranteed to already have
+        # it. NDK version matches core-usb/build.gradle.kts' native build;
+        # if AGP ever resolves a different default NDK, pin
+        # android.ndkVersion there to match this line instead of the other
+        # way around, so the two never silently drift apart.
+        run: sdkmanager --install "platforms;android-36" "build-tools;36.0.0" "ndk;27.0.12077973" "cmake;3.22.1"
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Build debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Run unit tests
+        # Separate from the build step and allowed to fail the job on its
+        # own: a compile success with a real test failure is still useful
+        # to see, not something to hide by bundling it into the build step.
+        run: ./gradlew testDebugUnitTest --stacktrace
+
+      - name: Upload APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bitperfectusb-debug-apk
+          # app/build/outputs/apk/debug/ is Gradle's standard output path
+          # for the "debug" build variant — unchanged by anything in this
+          # project, so this glob should hold regardless of which modules
+          # built successfully.
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: warn
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-results
+          path: app/build/reports/tests/
+          if-no-files-found: ignore

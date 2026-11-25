@@ -32,6 +32,7 @@
 - [Roadmap & Upcoming Updates](#-roadmap--upcoming-updates)
 - [Architecture & Module Design](#-architecture--module-design)
 - [How Bit-Perfect Playback Works](#-how-bit-perfect-playback-works)
+- [Download](#-download)
 - [Installation & Setup](#-installation--setup)
 - [Hardware Compatibility](#-hardware-compatibility)
 - [Academic Context & Research Thesis](#-academic-context--research-thesis)
@@ -45,7 +46,7 @@
 
 **Re:Bit** (BitPerfect USB) is a reference-grade Android music player and research platform designed to solve Android's notorious audio architecture limitations. By default, Android routes all audio through **AudioFlinger**, which forces sample-rate conversion (typically resampling everything to 48kHz), truncates 24-bit/32-bit audio to 16-bit, and applies mixer volume degradation.
 
-**Re:Bit** implements a **custom user-space USB Audio Class (UAC1 & UAC2) driver** written from scratch in Kotlin over Android's USB Host APIs. It talks directly to attached USB DACs via asynchronous isochronous endpoints, completely bypassing AudioFlinger, Android Audio HAL, and kernel ALSA mixer layers.
+**Re:Bit** implements a **custom user-space USB Audio Class (UAC1 & UAC2) driver**: Kotlin for device discovery and descriptor parsing over Android's USB Host APIs, and a native C++ isochronous engine on the kernel's usbfs for the audio stream itself. It talks directly to attached USB DACs, completely bypassing AudioFlinger, the Android Audio HAL, and the kernel ALSA mixer, and needs no root.
 
 In addition to bit-perfect streaming, the app provides a full suite of **On-Device AI DSP tools** (Real-time Karaoke vocal extraction/isolation, SOLA pitch shifting, DSEE upscaling, AutoEQ 5000+ headphone correction, romanized synchronized lyrics, CUE sheet parsing) and an **Academic Benchmarking Engine** running automated statistical experiments (Welch's t-test and One-Way ANOVA) directly on-device.
 
@@ -58,9 +59,12 @@ In addition to bit-perfect streaming, the app provides a full suite of **On-Devi
 - **Hardware Alternate-Setting Negotiation**: Dynamically queries DAC descriptors and issues `SET_INTERFACE` control requests for the exact (sample rate, bit depth, channel count) combination.
 - **Hardware Master Clock Control**: Issues `SET_CUR` sampling frequency / clock source requests to switch the DAC's internal oscillator to match the track's native frequency.
 - **Fractional Sample-Accurate Isochronous Scheduler**: Linux `snd-usb-audio`-grade fractional remainder accumulator (e.g. 44/45 frames per packet for 44.1kHz) ensuring long-term exact frame delivery.
-- **Dual Transfer Strategies**:
-  - **Pipelined (N-Buffering)**: Queues multiple `UsbRequest` frames ahead to absorb Android kernel scheduling jitter.
-  - **Synchronous**: Direct blocking submission for ultra-low latency testing.
+- **Native C++ Isochronous Driver** (`core-usb/src/main/cpp`): Android's Java USB API cannot submit isochronous transfers, so every USB Direct profile streams through the kernel's usbfs directly (`USBDEVFS_SUBMITURB`, ISO URBs), the same layer libusb and UAPP-class players use. Modelled on Linux's `snd-usb-audio`:
+  - **Bus-accurate timing**: packet rate from the bus speed (`USBDEVFS_GET_SPEED`) and the endpoint's `bInterval` (8000 packets/s on a high-speed UAC2 DAC), with high-bandwidth endpoints supported.
+  - **Asynchronous feedback**: reads the DAC's feedback endpoint (10.14 / 16.16, with auto-detection of devices that report it shifted) so the stream follows the DAC's own clock and never drifts. Exact rational pacing without feedback.
+  - **~1 ms multi-packet URBs** with a millisecond-sized queue (Settings › USB buffer latency), event-driven `poll()` reaping, an urgent-audio-priority transfer thread, and a lock-free ring that only hands out whole frames.
+  - **Clean track ends and unplug handling**: the queue drains before a track is reported finished, and a disconnected DAC stops the stream instead of hanging.
+  - Profiles: **DAC-clocked** (recommended), **Fixed rate** (ignores feedback), **Low latency** (8 ms queue). The portable core (`uac_stream_core.h`) has desktop unit tests: `core-usb/src/main/cpp/tests`.
 - **Live CRC32 Transfer Verifier**: Cryptographically computes dual running CRC32 checksums (`Source Decoded` vs. `Transmitted to Wire`) providing mathematical proof of bit-perfect delivery.
 - **Live USB Traffic Logger & Descriptor Explorer**: Real-time packet inspector and Device-Manager-style USB descriptor tree builder.
 
@@ -69,8 +73,8 @@ In addition to bit-perfect streaming, the app provides a full suite of **On-Devi
 ### 2. AI Audio & Karaoke Suite *(Work In Progress / Beta)*
 
 > [!NOTE]
-> **⚠️ Experimental Feature Notice (Planned Future Update)**:
-> The AI Vocal Separation and Stem Extraction feature is currently in **active beta development (WIP)**. The app currently features dual-mode center-crossover DSP suppression and frequency-domain STFT filtering, with full end-to-end deep neural network models (Demucs / Spleeter TFLite integration) scheduled for release in an upcoming major update.
+> **⚠️ Beta feature**:
+> Vocal separation is still in **beta**. The **full** edition ships Deezer's pretrained **Spleeter 2-stems** model (vocals / accompaniment) on-device; the **lite** edition leaves the model out and uses the built-in DSP path (center-crossover suppression and STFT filtering). The model is trained at 44.1 kHz, so tracks at other rates fall back to the DSP path as well.
 
 - **Real-Time Vocal Suppression & Isolation (`AiVocalIsolator`)**:
   - **Instrumental Mode**: Surgical center lead vocal suppression down to `-26dB` with bass (<160Hz) kick protection and high-end air (>8kHz) preservation.
@@ -78,7 +82,8 @@ In addition to bit-perfect streaming, the app provides a full suite of **On-Devi
   - **Zero-Distortion DSP**: Leaky power & cross-correlation envelope follower eliminates zero-crossing chatter, harmonic buzz, and artifacts.
   - **Zero-Crosstalk Retention**: Hard-panned stereo instruments (reverberant guitars, wide synths, backing layers) retain 100% stereo imaging.
 - **Offline Stem Extraction (`AiStemExtractor`)**: Pre-renders full tracks into isolated Instrumental/Acapella WAV stems with atomic multi-bit depth unpacking (16/24/32-bit) and instant caching.
-- **On-Device Neural Engine (`TfliteVocalSeparator`)**: Demucs/Spleeter-style 2048-point STFT Overlap-Add (OLA) frequency-domain Wiener ratio masking *(WIP - undergoing model tuning)*.
+- **On-Device Neural Separator (`SpleeterNeuralSeparator`, full edition)**: TFLite export of Deezer's pretrained Spleeter 2-stems checkpoint (MIT licensed), run with TensorFlow Select ops. Separates vocals and accompaniment for 44.1 kHz tracks.
+- **STFT Wiener Masking (`TfliteVocalSeparator`)**: 2048-point STFT overlap-add frequency-domain ratio masking, used when the neural model is absent or the track isn't 44.1 kHz.
 - **Sony DSEE-Style Spectral Upscaler**: Synthesizes and restores high-frequency harmonics lost during lossy compression.
 - **SOLA Real-Time Pitch Shifter**: Crossfaded dual-grain Synchronized Overlap-Add key transposer (±6 semitones) without tempo changes.
 - **Live Pitch Detection & Karaoke Mic Scorer (`KaraokeMicScorer`)**: Detects fundamental vocal pitch (F0), matches musical note intervals, and provides real-time scoring.
@@ -86,13 +91,29 @@ In addition to bit-perfect streaming, the app provides a full suite of **On-Devi
 ---
 
 ### 3. Audiophile DSP Pipeline
+On the Android-mixer path every stage runs in 32-bit float, in this order:
+`decode → sinc resampler → karaoke → ReplayGain → EQ → crossfeed → width → reverb → tube → look-ahead limiter → meter → dithered quantizer`.
+With every stage off, a source that fits the output depth passes through sample-for-sample.
+
+- **Gapless Playback** (`GaplessDecoder`): the next same-format track is opened 15 s early and spliced onto the stream at the exact sample — no AudioTrack teardown, no USB altsetting renegotiation. Works on both engines and keeps USB Direct bit-perfect.
+- **Windowed-Sinc Resampler** (`SincResampler`): polyphase Kaiser-windowed sinc with Fast / Balanced / Mastering presets (~60 / 90 / 120 dB alias rejection), replacing linear interpolation. Only used when the phone can't run at the track's native rate.
+- **TPDF & Noise-Shaped Dither** (`DitherQuantizer`): symmetric rounding, triangular dither and Lipshitz 5-tap E-weighted noise shaping when float audio is reduced to 16/24-bit. Untouched sources skip dither entirely.
+- **Transparent Look-Ahead Limiter** (`PeakLimiter`): 1.5 ms look-ahead brickwall at −0.1 dBFS with a sample-exact no-overshoot guarantee; replaces the per-stage hard clipping. Engages only once something has altered the signal.
+- **Live Signal Chain & Level Meter**: Now Playing shows a stereo IEC-scale LED meter (peak, RMS, peak hold, OVER lamp) and a chip for every stage touching the samples — or a single "Bit-perfect" chip.
+- **Album ReplayGain**: `REPLAYGAIN_ALBUM_GAIN/PEAK` are read and used in Album mode, so gapless albums keep their intended relative levels.
+- **Convolution** (`ConvolutionEngine`): load a room- or headphone-correction impulse response (WAV/FLAC/AIFF, mono or stereo, up to 65 536 taps). Uniformly partitioned FFT overlap-save, both channels in one complex FFT, resampled to the output rate and normalised to never add gain.
+- **Loudness Compensation**: ISO 226-style bass/treble lift that follows the media volume — none at full volume, more as you turn down.
+- **Live Analyzer**: a Now Playing page with a 31-band 1/3-octave real-time analyzer (calibrated in dBFS, peak hold), a stereo phase-correlation meter and the L/R level meter.
 - **10-Band Precision Equalizer**: 31Hz to 16kHz graphic/parametric EQ with FLAT, BASS BOOST, VOCAL, TREBLE, and AUDIOPHILE presets.
 - **Spatial Soundstage Stereo Expander**: Poweramp-style inter-aural stereo width enhancer (0.0x Mono to 2.0x Super-Wide).
 - **Studio Acoustic Reverb Simulator**: Real-time acoustic space simulator (Studio Room, Chamber, Concert Hall, Cathedral).
 - **Headphone Crossfeed Processor**: Low-pass blended inter-channel feed reducing headphone listening fatigue.
 - **ReplayGain & Dynamic Range Normalizer**: Native FLAC Vorbis comment reader parsing `REPLAYGAIN_TRACK_GAIN` and `REPLAYGAIN_TRACK_PEAK` with EBU R128 dynamic range protection.
 - **ABX Double-Blind Listening Test**: Built-in blind testing modal (Source A vs. Source B vs. Mystery X) calculating statistical trial confidence ($p$-value).
-- **Dynamic Range (DR) Meter**: Real-time crest factor and EBU R128 loudness metrics.
+- **Dynamic Range (DR) Meter**: TT-DR, crest factor, sample peak, clipping, DC offset.
+- **EBU R128 / BS.1770-4 Loudness** (`LoudnessMeter`): integrated loudness (LUFS) with gating, loudness range (LU, EBU Tech 3342), oversampled true peak (dBTP) and PLR — validated against the EBU Tech 3341/3342 test cases.
+- **Authenticity checks**: upsampled "fake hi-res", lossy-to-lossless transcodes, padded bit depth, inter-sample overs.
+- **Live USB link panel**: packets/s, DAC clock from async feedback (ppm), kernel queue, underruns and packet errors, plus the exact signal chain applied.
 
 ---
 
@@ -104,6 +125,7 @@ In addition to bit-perfect streaming, the app provides a full suite of **On-Devi
 ---
 
 ### 5. Advanced Library, CUE & Lyrics Engine
+- **Formats**: FLAC, WAV, AIFF/AIFF-C, ALAC (24-bit preserved), DSF and DFF (DSD64–DSD512), plus MP3, AAC, Opus and Ogg Vorbis. DSD plays as bit-perfect **DoP** to a DoP DAC over USB Direct and is otherwise converted to 24-bit 88.2 kHz PCM with a lookup-table FIR decimator.
 - **Non-Indexed Folder Walk**: Direct SAF (Storage Access Framework) folder picker allowing playback from external SD cards and OTG storage.
 - **CUE Sheet Parser (`CueParser`)**: Parses `.cue` files to split monolithic single-file FLAC/WAV albums into discrete tracks with exact index offsets.
 - **Synchronized LRC Lyrics**: Smooth timestamped lyrics scrolling with automatic metadata matching.
@@ -132,7 +154,8 @@ In addition to bit-perfect streaming, the app provides a full suite of **On-Devi
 
 ## 🔮 Roadmap & Upcoming Updates
 
-- [ ] **Full Neural Demucs/Spleeter TFLite Model**: Complete end-to-end multi-stem vocal, bass, and drum separation accelerated by Android NNAPI / GPU delegates.
+- [x] **Neural 2-Stem Separation**: Deezer Spleeter 2-stems (vocals / accompaniment) on-device in the full edition.
+- [ ] **Multi-Stem Neural Separation**: vocal, bass, and drum stems (Demucs / Spleeter 4-stems) accelerated by Android NNAPI / GPU delegates.
 - [ ] **Live Vocal Removal Polish**: Refined adaptive spectral Wiener filtering for complex reverberant stereo tracks.
 - [ ] **Dynamic AI Lyric Generation**: On-device speech-to-text lyrics extraction and real-time syllabic karaoke alignment.
 - [ ] **USB Audio Class 3.0 (UAC3) Support**: Advanced descriptor parsing, multi-channel BAP (Basic Audio Profile), and power management optimizations.
@@ -186,16 +209,32 @@ Audio File ──▶ Native Decoder ──▶ PcmContainerPacker ──▶ UsbIs
 1. **Direct USB Host Access**: The app claims the USB audio interface via `UsbDeviceConnection.claimInterface(usbInterface, true)`.
 2. **Dynamic Alt-Setting Switch**: The app scans descriptor trees and activates the exact matching `bAlternateSetting` for the media format.
 3. **Hardware Clock Configuration**: The app sends a `SET_CUR` control packet to the DAC's Clock Entity configuring the sampling frequency.
-4. **Zero-Copy Isochronous Pump**: PCM frames are packed into optimal subframe containers (e.g. 24-in-32) and streamed via asynchronous `UsbRequest` ring buffers.
+4. **Native Isochronous Pump**: PCM frames are packed into the DAC's subframe container (e.g. 24-in-32) and streamed by the C++ engine as ~1 ms isochronous URBs through usbfs (`USBDEVFS_SUBMITURB`), paced by the DAC's asynchronous feedback endpoint.
 5. **CRC32 Verification**: Every block of decoded audio is hashed before transport and verified against bytes written to the wire.
+
+---
+
+## 📥 Download
+
+Get the latest APK from **[Releases](https://github.com/Windstrom5/Audio-Player/releases)**. Re:Bit comes in two editions of the same app (package `com.windstrom5.rebit`):
+
+| Edition | APK | What's inside |
+| :--- | :--- | :--- |
+| **Full** | `Re-Bit-<version>-full.apk` | Everything, including the on-device Spleeter neural vocal separator. |
+| **Lite** | `Re-Bit-<version>-lite.apk` | About 30 MB smaller. No neural model; karaoke and stem separation use the built-in DSP path. |
+
+Install only one edition: both share the same package name, so the second one replaces the first.
+
+- Requires **Android 8.0 (API 26)** or newer on a **64-bit (arm64-v8a)** phone.
+- For USB Direct playback: a class-compliant USB DAC and a phone with USB Host (OTG) support.
+- These are **beta** builds; see the Roadmap for what is still in progress.
 
 ---
 
 ## 💻 Installation & Setup
 
 ### Prerequisites
-- Android Studio Narwhal (2024.1+) or newer
-- Android SDK 35 / Build-Tools 35.0.0
+- Android Studio (recent stable) with **Android SDK 36**, **NDK 27.0.12077973** and **CMake 3.22.1** (the USB engine in `core-usb` is native C++)
 - JDK 17 or JDK 21
 - Physical Android device running **Android 8.0 (API 26) or higher** (USB Host mode cannot be tested on an emulator)
 - Class-compliant USB DAC (USB Type-C dongle or desktop DAC) + OTG adapter/cable
@@ -203,18 +242,18 @@ Audio File ──▶ Native Decoder ──▶ PcmContainerPacker ──▶ UsbIs
 ### Build via Gradle
 ```bash
 # Clone the repository
-git clone https://github.com/your-username/Re-Bit.git
-cd Re-Bit
+git clone https://github.com/Windstrom5/Audio-Player.git
+cd Audio-Player
 
-# Run unit tests (All 53+ tests for DSP, USB scheduler & Statistics)
-./gradlew testDebugUnitTest
+# Run unit tests (300+ tests: DSP, USB scheduler, loudness, statistics)
+./gradlew testLiteDebugUnitTest
 
-# Assemble Debug APK
-./gradlew assembleDebug
-
-# Install to connected device via ADB
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+# Build and install a debug build on a connected device (pick an edition)
+./gradlew installFullDebug
+./gradlew installLiteDebug
 ```
+
+Release builds need a signing key; see [`RELEASING.md`](RELEASING.md). Release APKs contain only `arm64-v8a`; add `-PrebitAbis=arm64-v8a,armeabi-v7a` for old 32-bit phones.
 
 ---
 
@@ -248,11 +287,11 @@ This project was built as the reference implementation for the academic research
 
 - **Core & Runtime**: Kotlin 2.2.21, Kotlin Coroutines, Kotlin Flows, Java NIO
 - **UI & Design**: Jetpack Compose, Material 3, Compose Navigation
-- **Dependency Injection**: Koin 4.0
+- **Dependency Injection**: Koin 3.5
 - **Storage & Database**: Room 2.7 (SQLite), Storage Access Framework (SAF)
-- **Audio & DSP**: Custom USB Host Driver, Biquad IIR Filters, Demucs STFT Wiener Masking, SOLA Pitch Shifting, jFLAC
-- **Machine Learning**: TensorFlow Lite Android Support (v2.14.0)
-- **Testing & Verification**: JUnit 4, AndroidX Test, CRC32 Checksum Engine
+- **Audio & DSP**: Custom USB Host driver (Kotlin + native C++ usbfs isochronous engine, NDK/CMake), Biquad IIR Filters, STFT Wiener Masking, SOLA Pitch Shifting, jFLAC
+- **Machine Learning**: TensorFlow Lite 2.14 with Select TF ops (Spleeter 2-stems, full edition)
+- **Testing & Verification**: JUnit 4 (300+ unit tests), C++ desktop tests for the USB stream core, AndroidX Test, CRC32 Checksum Engine
 
 ---
 

@@ -74,9 +74,19 @@ def separate_audio(input_file: str, output_dir: str = "./separated_stems", model
         print("[-] Demucs separation encountered an error.")
         return None
 
-def push_to_phone(stem_dir: Path):
+def push_to_phone(stem_dir: Path, track_name: str):
     """
-    Pushes the separated instrumental and vocal tracks to the connected Android device via ADB.
+    Pushes the separated instrumental and vocal tracks to the connected Android
+    device via ADB, into the fixed folder BitPerfectUSB's ExternalStemResolver
+    checks (Music/BitPerfect_Stems). Each pushed file is prefixed with the
+    source track's own name — e.g. "Song Title_no_vocals.flac" — because Demucs
+    always names its own output "vocals.flac"/"no_vocals.flac" regardless of
+    the source; pushing those names as-is into one shared phone folder would
+    silently overwrite the previous song's stems the next time this runs.
+    track_name should match the title BitPerfectUSB shows for the track in its
+    library (it's matched against the on-device file's display name minus
+    extension) — safest is to pass the source file's own base name, i.e. don't
+    rename the source file before running this script.
     """
     print(f"\n[+] Checking ADB connection for Android device...")
     try:
@@ -88,13 +98,33 @@ def push_to_phone(stem_dir: Path):
         phone_music_dir = "/sdcard/Music/BitPerfect_Stems"
         subprocess.run(["adb", "shell", "mkdir", "-p", phone_music_dir])
 
-        for file in stem_dir.glob("*.flac"):
-            print(f"    Pushing {file.name} -> {phone_music_dir}/{file.name} ...")
-            subprocess.run(["adb", "push", str(file), f"{phone_music_dir}/{file.name}"])
+        # Demucs' own two-stems output is always named exactly "vocals.flac" /
+        # "no_vocals.flac" — map those to the resolver's expected suffixes.
+        rename_map = {
+            "no_vocals.flac": f"{track_name}_no_vocals.flac",
+            "vocals.flac": f"{track_name}_vocals.flac",
+        }
 
-        # Trigger Android media scanner
-        subprocess.run(["adb", "shell", "am", "broadcast", "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE", "-d", f"file://{phone_music_dir}"])
+        pushed_paths = []
+        for file in stem_dir.glob("*.flac"):
+            remote_name = rename_map.get(file.name, f"{track_name}_{file.name}")
+            remote_path = f"{phone_music_dir}/{remote_name}"
+            print(f"    Pushing {file.name} -> {remote_path} ...")
+            subprocess.run(["adb", "push", str(file), remote_path])
+            pushed_paths.append(remote_path)
+
+        # Trigger the Android media scanner per file (a folder-level scan
+        # intent doesn't reliably index newly pushed files on every OS version;
+        # per-file does) so MediaStore picks these up immediately rather than
+        # waiting for the next full-device scan.
+        for remote_path in pushed_paths:
+            subprocess.run([
+                "adb", "shell", "am", "broadcast",
+                "-a", "android.intent.action.MEDIA_SCANNER_SCAN_FILE",
+                "-d", f"file://{remote_path}"
+            ])
         print(f"[✓] Successfully transferred studio stems to phone: '{phone_music_dir}'!")
+        print(f"    BitPerfectUSB will pick these up automatically next time you play '{track_name}' with karaoke mode on.")
     except FileNotFoundError:
         print("[-] ADB not found in system PATH. Install Android platform-tools to use --push-to-phone.")
 
@@ -113,7 +143,8 @@ def main():
     stems_path = separate_audio(args.input, args.output, args.model, two_stems_arg)
 
     if stems_path and args.push_to_phone:
-        push_to_phone(stems_path)
+        track_name = Path(args.input).stem
+        push_to_phone(stems_path, track_name)
 
 if __name__ == "__main__":
     main()
